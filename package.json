@@ -1,0 +1,15 @@
+{
+  "name": "plazo-arca-oficial",
+  "version": "1.0.0",
+  "description": "Sistema de Presupuestos y Facturación Electrónica Oficial ARCA (AFIP) para Celular y PC",
+  "main": "arca-server.js",
+  "scripts": {
+    "start": "node arca-server.js"
+  },
+  "keywords": ["arca", "afip", "factura-electronica", "presupuestos"],
+  "author": "PLAZO",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
