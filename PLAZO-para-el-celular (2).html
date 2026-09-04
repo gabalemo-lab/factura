@@ -3159,22 +3159,65 @@ async function viewPdf(v) {
 
 async function makePdfBlob() {
   const el = $("#pdfdoc");
-  const canvas = await html2canvas(el, { scale: 2, useCORS: true, backgroundColor: "#ffffff" });
-  const img = canvas.toDataURL("image/jpeg", 0.95);
+  if (!el) throw new Error("Documento no encontrado");
+
+  // Forzar captura en formato A4 estándar (794px = 210mm a 96DPI)
+  const canvas = await html2canvas(el, {
+    scale: 2,
+    useCORS: true,
+    backgroundColor: "#ffffff",
+    windowWidth: 1024,
+    onclone: (clonedDoc) => {
+      const clonedEl = clonedDoc.getElementById("pdfdoc");
+      if (clonedEl) {
+        clonedEl.style.width = "794px";
+        clonedEl.style.minWidth = "794px";
+        clonedEl.style.maxWidth = "794px";
+        clonedEl.style.boxSizing = "border-box";
+        clonedEl.style.margin = "0 auto";
+        clonedEl.style.padding = "24px 28px";
+        clonedEl.style.fontSize = "11.5px";
+        clonedEl.style.transform = "none";
+
+        const topEl = clonedEl.querySelector(".pdf-top");
+        if (topEl) topEl.style.gridTemplateColumns = "1fr 200px";
+
+        const arcaTop = clonedEl.querySelector(".pdf-arca-top");
+        if (arcaTop) arcaTop.style.gridTemplateColumns = "1.15fr 74px 1.15fr";
+
+        const clientEl = clonedEl.querySelector(".pdf-client");
+        if (clientEl) clientEl.style.gridTemplateColumns = "1fr 1fr";
+
+        const footEl = clonedEl.querySelector(".pdf-foot");
+        if (footEl) footEl.style.gridTemplateColumns = "1fr 1fr";
+
+        const signEl = clonedEl.querySelector(".pdf-sign");
+        if (signEl) signEl.style.gridTemplateColumns = "1fr 1fr";
+      }
+    },
+  });
+
+  const img = canvas.toDataURL("image/jpeg", 0.96);
   const { jsPDF } = window.jspdf;
   const pdf = new jsPDF("p", "mm", "a4");
   const pageW = 210;
   const pageH = 297;
   const imgH = (canvas.height * pageW) / canvas.width;
-  let hLeft = imgH;
-  let pos = 0;
-  pdf.addImage(img, "JPEG", 0, pos, pageW, imgH);
-  hLeft -= pageH;
-  while (hLeft > 0) {
-    pos = hLeft - imgH;
-    pdf.addPage();
+
+  // Si entra en una página A4, la ajustamos perfecta a 1 hoja
+  if (imgH <= pageH + 8) {
+    pdf.addImage(img, "JPEG", 0, 0, pageW, Math.min(imgH, pageH));
+  } else {
+    let hLeft = imgH;
+    let pos = 0;
     pdf.addImage(img, "JPEG", 0, pos, pageW, imgH);
     hLeft -= pageH;
+    while (hLeft > 5) {
+      pos = hLeft - imgH;
+      pdf.addPage();
+      pdf.addImage(img, "JPEG", 0, pos, pageW, imgH);
+      hLeft -= pageH;
+    }
   }
   return pdf.output("blob");
 }
