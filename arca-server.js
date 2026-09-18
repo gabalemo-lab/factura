@@ -9,9 +9,17 @@
 
 const http = require("http");
 const https = require("https");
+const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 const { execSync } = require("child_process");
+
+// Agente HTTPS compatible con el cifrado y niveles de seguridad de los servidores de AFIP / ARCA
+const httpsAgent = new https.Agent({
+  ciphers: "DEFAULT:@SECLEVEL=0",
+  secureOptions: crypto.constants.SSL_OP_LEGACY_SERVER_CONNECT,
+  keepAlive: true,
+});
 
 const PORT = process.env.PORT || 3000;
 const CONFIG_FILE = path.join(__dirname, "arca-config.json");
@@ -139,6 +147,7 @@ function postSoap(urlStr, soapAction, soapBody) {
         port: u.port || 443,
         path: u.pathname,
         method: "POST",
+        agent: httpsAgent,
         headers,
       },
       (res) => {
