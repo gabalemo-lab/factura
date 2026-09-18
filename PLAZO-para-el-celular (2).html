@@ -3942,9 +3942,15 @@ async function viewConfig(v) {
       if (res.ok) {
         const data = await res.json();
         if (data.online) {
-          resDiv.style.background = "#d4edda";
-          resDiv.style.color = "#155724";
-          resDiv.innerHTML = `✅ <b>Conexión Exitosa con AFIP:</b> AppServer: ${data.appServer} · DbServer: ${data.dbServer} · AuthServer: ${data.authServer} (Modo: ${data.entorno.toUpperCase()})`;
+          if (data.wsaaError) {
+            resDiv.style.background = "#fff3cd";
+            resDiv.style.color = "#856404";
+            resDiv.innerHTML = `⚠️ <b>Servidores AFIP Online (${data.appServer}), pero hay un aviso con el Certificado:</b><br/>${data.wsaaError}`;
+          } else {
+            resDiv.style.background = "#d4edda";
+            resDiv.style.color = "#155724";
+            resDiv.innerHTML = `✅ <b>Conexión Exitosa con AFIP / ARCA:</b><br/>• Servidores AFIP: AppServer (${data.appServer}) · DbServer (${data.dbServer}) · AuthServer (${data.authServer})<br/>• Autenticación WSAA: ${data.wsaa === "OK" ? "Autorizado y Listo para emitir CAE" : "Online"}<br/>• Entorno: <b>${data.entorno.toUpperCase()}</b> · CUIT: <b>${data.cuit}</b> · Punto de Venta: <b>${data.puntoVenta}</b>`;
+          }
         } else {
           resDiv.style.background = "#fff3cd";
           resDiv.style.color = "#856404";
@@ -4707,5 +4713,5 @@ async function boot() {
 }
 boot();
 </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a315b8406b124175',t:'MTc4Nzc3NzU0MQ=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a315b8406b124175',t:'MTc4Nzc3NzU0MQ=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script><script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a3ccd8f99be39b1a',t:'MTc4OTY5Nzc3NQ=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
