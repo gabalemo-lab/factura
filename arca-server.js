@@ -350,7 +350,11 @@ async function emitirFacturaArca(datos) {
 
   const fechaIso = datos.fecha || new Date().toISOString().slice(0, 10);
   const cbteFch = fechaIso.replace(/-/g, ""); // YYYYMMDD
-  const concepto = Number(datos.concepto || 3); // 1: Productos, 2: Servicios, 3: Productos y Servicios
+  const concepto = Number(datos.concepto || 2); // 1: Productos, 2: Servicios, 3: Productos y Servicios
+
+  const fchDesde = (datos.periodoDesde || fechaIso).replace(/-/g, "");
+  const fchHasta = (datos.periodoHasta || fechaIso).replace(/-/g, "");
+  const fchVto = (datos.vtoPago || datos.fecha || new Date().toISOString().slice(0, 10)).replace(/-/g, "");
 
   const docTipo = Number(datos.docTipo || 99); // 80: CUIT, 96: DNI, 99: Final
   const docNro = Number(String(datos.docNro || 0).replace(/\D/g, ""));
@@ -365,9 +369,9 @@ async function emitirFacturaArca(datos) {
   let fchServXml = "";
   if (concepto === 2 || concepto === 3) {
     fchServXml = `
-      <FchServDesde>${cbteFch}</FchServDesde>
-      <FchServHasta>${cbteFch}</FchServHasta>
-      <FchVtoPago>${cbteFch}</FchVtoPago>`;
+      <FchServDesde>${fchDesde}</FchServDesde>
+      <FchServHasta>${fchHasta}</FchServHasta>
+      <FchVtoPago>${fchVto}</FchVtoPago>`;
   }
 
   let ivaXml = "";
