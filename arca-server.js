@@ -14,6 +14,9 @@ const fs = require("fs");
 const path = require("path");
 const { execSync } = require("child_process");
 
+const PORT = process.env.PORT || 3000;
+const CONFIG_FILE = path.join(__dirname, "arca-config.json");
+
 // Agente HTTPS compatible con el cifrado y niveles de seguridad de los servidores de AFIP / ARCA
 const httpsAgent = new https.Agent({
   ciphers: "DEFAULT:@SECLEVEL=0",
@@ -21,13 +24,20 @@ const httpsAgent = new https.Agent({
   keepAlive: true,
 });
 
-const PORT = process.env.PORT || 3000;
-const CONFIG_FILE = path.join(__dirname, "arca-config.json");
+// Normalizar certificados y claves (por si las variables de entorno traen saltos de línea escapados '\n')
+function normalizePem(str) {
+  if (!str) return "";
+  let clean = String(str).trim();
+  if (clean.includes("\\n")) {
+    clean = clean.replace(/\\n/g, "\n");
+  }
+  return clean;
+}
 
 // Configuración por defecto
 let arcaConfig = {
-  cuit: "20123456789",
-  entorno: "homologacion", // "homologacion" o "produccion"
+  cuit: "23285237289",
+  entorno: "produccion", // "homologacion" o "produccion"
   puntoVenta: 2,
   certPath: path.join(__dirname, "certificado.crt"),
   keyPath: path.join(__dirname, "privada.key"),
@@ -47,8 +57,8 @@ if (fs.existsSync(CONFIG_FILE)) {
 if (process.env.ARCA_CUIT) arcaConfig.cuit = process.env.ARCA_CUIT;
 if (process.env.ARCA_MODO) arcaConfig.entorno = process.env.ARCA_MODO;
 if (process.env.ARCA_PV) arcaConfig.puntoVenta = Number(process.env.ARCA_PV);
-if (process.env.ARCA_CERT) arcaConfig.certContent = process.env.ARCA_CERT;
-if (process.env.ARCA_KEY) arcaConfig.keyContent = process.env.ARCA_KEY;
+if (process.env.ARCA_CERT) arcaConfig.certContent = normalizePem(process.env.ARCA_CERT);
+if (process.env.ARCA_KEY) arcaConfig.keyContent = normalizePem(process.env.ARCA_KEY);
 
 // Caché de Ticket de Acceso (WSAA)
 let authTicketCache = {
@@ -93,10 +103,10 @@ function createTraXml(service = "wsfe") {
  * Firma el TRA con CMS / PKCS#7 usando certificado y clave privada
  */
 function signTra(traXml) {
-  const tmpTra = path.join("/tmp", `tra_${Date.now()}.xml`);
-  const tmpCms = path.join("/tmp", `tra_${Date.now()}.cms`);
-  const tmpCert = path.join("/tmp", `cert_${Date.now()}.crt`);
-  const tmpKey = path.join("/tmp", `key_${Date.now()}.key`);
+  const tmpTra = path.join("/tmp", `tra_${Date.now()}_${Math.random().toString(36).substring(2)}.xml`);
+  const tmpCms = path.join("/tmp", `tra_${Date.now()}_${Math.random().toString(36).substring(2)}.cms`);
+  const tmpCert = path.join("/tmp", `cert_${Date.now()}_${Math.random().toString(36).substring(2)}.crt`);
+  const tmpKey = path.join("/tmp", `key_${Date.now()}_${Math.random().toString(36).substring(2)}.key`);
 
   try {
     fs.writeFileSync(tmpTra, traXml, "utf-8");
@@ -105,16 +115,16 @@ function signTra(traXml) {
     let keyFile = arcaConfig.keyPath;
 
     if (arcaConfig.certContent) {
-      fs.writeFileSync(tmpCert, arcaConfig.certContent, "utf-8");
+      fs.writeFileSync(tmpCert, normalizePem(arcaConfig.certContent), "utf-8");
       certFile = tmpCert;
     }
     if (arcaConfig.keyContent) {
-      fs.writeFileSync(tmpKey, arcaConfig.keyContent, "utf-8");
+      fs.writeFileSync(tmpKey, normalizePem(arcaConfig.keyContent), "utf-8");
       keyFile = tmpKey;
     }
 
     if (!fs.existsSync(certFile) || !fs.existsSync(keyFile)) {
-      throw new Error(`Certificado o clave no encontrados (${certFile}, ${keyFile}). Cargalos en Configuración.`);
+      throw new Error(`Certificado o clave no encontrados. Asegurate de cargar ARCA_CERT y ARCA_KEY en Environment de Render.`);
     }
 
     // Firma PKCS#7 en formato DER
@@ -192,19 +202,41 @@ async function getAuthTicket() {
   </soapenv:Body>
 </soapenv:Envelope>`;
 
-  const respXml = await postSoap(urls.wsaa, "", soap);
-  const tokenMatch = respXml.match(/<token>(.*?)<\/token>/);
-  const signMatch = respXml.match(/<sign>(.*?)<\/sign>/);
-  const expMatch = respXml.match(/<expirationTime>(.*?)<\/expirationTime>/);
-
-  if (!tokenMatch || !signMatch) {
-    const faultMatch = respXml.match(/<faultstring>(.*?)<\/faultstring>/);
-    throw new Error(faultMatch ? faultMatch[1] : "Error obteniendo autorización de ARCA / AFIP (WSAA).");
+  let respXml;
+  try {
+    respXml = await postSoap(urls.wsaa, "", soap);
+  } catch (err) {
+    console.error("Error en postSoap a WSAA:", err);
+    throw new Error(`Error de conexión con AFIP WSAA: ${err.message}`);
   }
 
-  const token = tokenMatch[1];
-  const sign = signMatch[1];
-  const expDate = expMatch ? new Date(expMatch[1]) : new Date(now.getTime() + 10 * 3600 * 1000);
+  // AFIP WSAA devuelve la respuesta dentro de loginCmsReturn con entidades XML escapadas (&lt; &gt;)
+  let rawXml = respXml;
+  const returnMatch = respXml.match(/<loginCmsReturn[^>]*>([\s\S]*?)<\/loginCmsReturn>/i);
+  if (returnMatch) {
+    rawXml = returnMatch[1]
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&quot;/g, '"')
+      .replace(/&apos;/g, "'")
+      .replace(/&amp;/g, "&");
+  }
+
+  const tokenMatch = rawXml.match(/<token[^>]*>([\s\S]*?)<\/token>/i);
+  const signMatch = rawXml.match(/<sign[^>]*>([\s\S]*?)<\/sign>/i);
+  const expMatch = rawXml.match(/<expirationTime[^>]*>([\s\S]*?)<\/expirationTime>/i);
+
+  if (!tokenMatch || !signMatch) {
+    console.error("Respuesta WSAA:", respXml);
+    const faultMatch = respXml.match(/<faultstring[^>]*>([\s\S]*?)<\/faultstring>/i);
+    const detailMatch = respXml.match(/<detail[^>]*>([\s\S]*?)<\/detail>/i);
+    const msg = faultMatch ? faultMatch[1].trim() : (detailMatch ? detailMatch[1].trim() : "Ticket no recibido de AFIP");
+    throw new Error(`AFIP WSAA: ${msg}`);
+  }
+
+  const token = tokenMatch[1].trim();
+  const sign = signMatch[1].trim();
+  const expDate = expMatch ? new Date(expMatch[1].trim()) : new Date(now.getTime() + 10 * 3600 * 1000);
 
   authTicketCache = {
     token,
@@ -212,6 +244,7 @@ async function getAuthTicket() {
     expiration: expDate,
   };
 
+  console.log(`✓ Ticket de Acceso ARCA obtenido con éxito. Vence: ${expDate.toISOString()}`);
   return authTicketCache;
 }
 
@@ -232,14 +265,30 @@ async function getStatus() {
     const app = (resp.match(/<AppServer>(.*?)<\/AppServer>/) || [])[1] || "—";
     const db = (resp.match(/<DbServer>(.*?)<\/DbServer>/) || [])[1] || "—";
     const auth = (resp.match(/<AuthServer>(.*?)<\/AuthServer>/) || [])[1] || "—";
+
+    let wsaaStatus = "OK";
+    let wsaaError = null;
+    try {
+      if (arcaConfig.certContent || fs.existsSync(arcaConfig.certPath)) {
+        await getAuthTicket();
+      }
+    } catch (wErr) {
+      wsaaStatus = "ERROR";
+      wsaaError = wErr.message;
+    }
+
     return {
       online: app === "OK" && db === "OK" && auth === "OK",
       appServer: app,
       dbServer: db,
       authServer: auth,
+      wsaa: wsaaStatus,
+      wsaaError,
       entorno: arcaConfig.entorno,
       cuit: arcaConfig.cuit,
       puntoVenta: arcaConfig.puntoVenta,
+      hasCert: Boolean(arcaConfig.certContent || fs.existsSync(arcaConfig.certPath)),
+      hasKey: Boolean(arcaConfig.keyContent || fs.existsSync(arcaConfig.keyPath)),
     };
   } catch (err) {
     return {
@@ -498,8 +547,8 @@ const server = http.createServer(async (req, res) => {
       if (body.cuit) arcaConfig.cuit = body.cuit;
       if (body.entorno) arcaConfig.entorno = body.entorno;
       if (body.puntoVenta) arcaConfig.puntoVenta = Number(body.puntoVenta);
-      if (body.certContent) arcaConfig.certContent = body.certContent;
-      if (body.keyContent) arcaConfig.keyContent = body.keyContent;
+      if (body.certContent) arcaConfig.certContent = normalizePem(body.certContent);
+      if (body.keyContent) arcaConfig.keyContent = normalizePem(body.keyContent);
 
       fs.writeFileSync(CONFIG_FILE, JSON.stringify(arcaConfig, null, 2), "utf-8");
       authTicketCache = { token: null, sign: null, expiration: null }; // Invalidar caché
