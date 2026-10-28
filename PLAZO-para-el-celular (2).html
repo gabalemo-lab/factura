@@ -3233,69 +3233,440 @@ async function viewPdf(v) {
   $("#btn-share").onclick = () => sharePdf(q);
 }
 
-async function makePdfBlob() {
-  const el = $("#pdfdoc");
+function buildPaginatedPages(originalEl) {
+  const clone = originalEl.cloneNode(true);
+  clone.style.width = "794px";
+  clone.style.minWidth = "794px";
+  clone.style.maxWidth = "794px";
+  clone.style.boxSizing = "border-box";
+  clone.style.margin = "0 auto";
+  clone.style.padding = "24px 28px";
+  clone.style.fontSize = "11.5px";
+  clone.style.transform = "none";
+
+  const topEl = clone.querySelector(".pdf-top");
+  if (topEl) topEl.style.gridTemplateColumns = "1fr 200px";
+
+  const arcaTop = clone.querySelector(".pdf-arca-top");
+  if (arcaTop) arcaTop.style.gridTemplateColumns = "1.15fr 74px 1.15fr";
+
+  const clientEl = clone.querySelector(".pdf-client");
+  if (clientEl) clientEl.style.gridTemplateColumns = "1fr 1fr";
+
+  const footEl = clone.querySelector(".pdf-foot");
+  if (footEl) footEl.style.gridTemplateColumns = "1fr 1fr";
+
+  const signEl = clone.querySelector(".pdf-sign");
+  if (signEl) signEl.style.gridTemplateColumns = "1fr 1fr";
+
+  const table = clone.querySelector(".pdf-table");
+  if (!table) return [clone];
+
+  const rows = Array.from(table.querySelectorAll("tbody tr"));
+  // Si tiene 6 o menos renglones, entra perfecto en 1 sola hoja A4
+  if (rows.length <= 6) return [clone];
+
+  const pages = [];
+  const theadHtml = table.querySelector("thead") ? table.querySelector("thead").outerHTML : "";
+  const tableClasses = table.className || "pdf-table";
+
+  // Extraer bloque superior
+  let headerHtml = "";
+  for (let i = 0; i < clone.children.length; i++) {
+    const child = clone.children[i];
+    if (child === table || child.contains(table)) break;
+    headerHtml += child.outerHTML;
+  }
+
+  // Extraer bloque inferior (totales, cuotas, CAE / firmas)
+  let footerHtml = "";
+  let foundTable = false;
+  for (let i = 0; i < clone.children.length; i++) {
+    const child = clone.children[i];
+    if (child === table || child.contains(table)) {
+      foundTable = true;
+      continue;
+    }
+    if (foundTable) {
+      footerHtml += child.outerHTML;
+    }
+  }
+
+  const ROWS_PAGE1 = 6;
+  const ROWS_MIDDLE_PAGE = 13;
+  const numPages = rows.length <= 12 ? 2 : Math.ceil((rows.length - ROWS_PAGE1) / ROWS_MIDDLE_PAGE) + 1;
+  const page1RowsCount = rows.length <= 12 ? Math.min(ROWS_PAGE1, Math.ceil(rows.length / 2)) : ROWS_PAGE1;
+
+  // Hoja 1
+  const p1 = document.createElement("div");
+  p1.className = "pdf-page-clone";
+  p1.style.width = "794px";
+  p1.style.minHeight = "1120px";
+  p1.style.maxHeight = "1120px";
+  p1.style.boxSizing = "border-box";
+  p1.style.padding = "24px 28px";
+  p1.style.background = "#fff";
+  p1.style.position = "relative";
+  p1.style.fontSize = "11.5px";
+
+  const p1RowsHtml = rows.slice(0, page1RowsCount).map((r) => r.outerHTML).join("");
+  p1.innerHTML = `
+    ${headerHtml}
+    <table class="${tableClasses}" style="width:100%;border-collapse:collapse;margin-top:6px">
+      ${theadHtml}
+      <tbody>${p1RowsHtml}</tbody>
+    </table>
+    <div style="position:absolute;bottom:14px;left:28px;right:28px;display:flex;justify-content:space-between;font-size:10px;color:#777;border-top:1px solid #e0dbd1;padding-top:4px">
+      <span>Continúa en la siguiente hoja…</span>
+      <span>Página 1 de ${numPages}</span>
+    </div>
+  `;
+  pages.push(p1);
+
+  // Hojas subsiguientes
+  let curIdx = page1RowsCount;
+  for (let p = 2; p <= numPages; p++) {
+    const isLast = p === numPages;
+    const pageRowsCount = isLast ? (rows.length - curIdx) : ROWS_MIDDLE_PAGE;
+    const curRowsHtml = rows.slice(curIdx, curIdx + pageRowsCount).map((r) => r.outerHTML).join("");
+    curIdx += pageRowsCount;
+
+    const pDiv = document.createElement("div");
+    pDiv.className = "pdf-page-clone";
+    pDiv.style.width = "794px";
+    pDiv.style.minHeight = "1120px";
+    pDiv.style.maxHeight = "1120px";
+    pDiv.style.boxSizing = "border-box";
+    pDiv.style.padding = "24px 28px";
+    pDiv.style.background = "#fff";
+    pDiv.style.position = "relative";
+    pDiv.style.fontSize = "11.5px";
+
+    pDiv.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1.5px solid #0e2a22;padding-bottom:6px;margin-bottom:10px;font-size:11px">
+        <span style="font-weight:800;color:#0e2a22;text-transform:uppercase">Comprobante Oficial — Continuación</span>
+        <span style="font-size:10px;color:#555">Página ${p} de ${numPages}</span>
+      </div>
+      <table class="${tableClasses}" style="width:100%;border-collapse:collapse;margin-bottom:10px">
+        ${theadHtml}
+        <tbody>${curRowsHtml}</tbody>
+      </table>
+      ${isLast ? footerHtml : ""}
+      <div style="position:absolute;bottom:14px;left:28px;right:28px;display:flex;justify-content:space-between;font-size:10px;color:#777;border-top:1px solid #e0dbd1;padding-top:4px">
+        <span>${isLast ? "Documento Oficial ARCA" : "Continúa…"}</span>
+        <span>Página ${p} de ${numPages}</span>
+      </div>
+    `;
+    pages.push(pDiv);
+  }
+
+  return pages;
+}
+
+async function makePdfBlob(customEl) {
+  const el = customEl || $("#pdfdoc");
   if (!el) throw new Error("Documento no encontrado");
 
-  // Forzar captura en formato A4 estándar (794px = 210mm a 96DPI)
-  const canvas = await html2canvas(el, {
-    scale: 2,
-    useCORS: true,
-    backgroundColor: "#ffffff",
-    windowWidth: 1024,
-    onclone: (clonedDoc) => {
-      const clonedEl = clonedDoc.getElementById("pdfdoc");
-      if (clonedEl) {
-        clonedEl.style.width = "794px";
-        clonedEl.style.minWidth = "794px";
-        clonedEl.style.maxWidth = "794px";
-        clonedEl.style.boxSizing = "border-box";
-        clonedEl.style.margin = "0 auto";
-        clonedEl.style.padding = "24px 28px";
-        clonedEl.style.fontSize = "11.5px";
-        clonedEl.style.transform = "none";
-
-        const topEl = clonedEl.querySelector(".pdf-top");
-        if (topEl) topEl.style.gridTemplateColumns = "1fr 200px";
-
-        const arcaTop = clonedEl.querySelector(".pdf-arca-top");
-        if (arcaTop) arcaTop.style.gridTemplateColumns = "1.15fr 74px 1.15fr";
-
-        const clientEl = clonedEl.querySelector(".pdf-client");
-        if (clientEl) clientEl.style.gridTemplateColumns = "1fr 1fr";
-
-        const footEl = clonedEl.querySelector(".pdf-foot");
-        if (footEl) footEl.style.gridTemplateColumns = "1fr 1fr";
-
-        const signEl = clonedEl.querySelector(".pdf-sign");
-        if (signEl) signEl.style.gridTemplateColumns = "1fr 1fr";
-      }
-    },
-  });
-
-  const img = canvas.toDataURL("image/jpeg", 0.96);
   const { jsPDF } = window.jspdf;
   const pdf = new jsPDF("p", "mm", "a4");
   const pageW = 210;
   const pageH = 297;
-  const imgH = (canvas.height * pageW) / canvas.width;
 
-  // Si entra en una página A4, la ajustamos perfecta a 1 hoja
-  if (imgH <= pageH + 8) {
-    pdf.addImage(img, "JPEG", 0, 0, pageW, Math.min(imgH, pageH));
-  } else {
-    let hLeft = imgH;
-    let pos = 0;
-    pdf.addImage(img, "JPEG", 0, pos, pageW, imgH);
-    hLeft -= pageH;
-    while (hLeft > 5) {
-      pos = hLeft - imgH;
-      pdf.addPage();
-      pdf.addImage(img, "JPEG", 0, pos, pageW, imgH);
-      hLeft -= pageH;
+  // Contenedor temporal fuera de pantalla
+  const container = document.createElement("div");
+  container.style.position = "fixed";
+  container.style.top = "-99999px";
+  container.style.left = "-99999px";
+  container.style.width = "794px";
+  container.style.background = "#fff";
+  container.style.zIndex = "-1000";
+  document.body.appendChild(container);
+
+  try {
+    const pageDivs = buildPaginatedPages(el);
+    for (let i = 0; i < pageDivs.length; i++) {
+      container.innerHTML = "";
+      container.appendChild(pageDivs[i]);
+
+      const canvas = await html2canvas(pageDivs[i], {
+        scale: 2,
+        useCORS: true,
+        backgroundColor: "#ffffff",
+        windowWidth: 1024,
+      });
+
+      const img = canvas.toDataURL("image/jpeg", 0.96);
+      if (i > 0) pdf.addPage();
+      pdf.addImage(img, "JPEG", 0, 0, pageW, pageH);
     }
+  } finally {
+    if (container.parentNode) container.parentNode.removeChild(container);
   }
+
   return pdf.output("blob");
+}
+
+function createVirtualFacturaEl(fac, s) {
+  const cli = fac.clientSnapshot || {};
+  const logo = (s && s.logoDataUrl) || window.PLAZO_ICON || "/icons/icon-192.png";
+  const { url: qrUrl, svg: qrSvg } = makeArcaQrSvg(fac);
+  const t = fac.totals || {};
+  const isFacturaA = fac.letra === "A";
+
+  const el = document.createElement("article");
+  el.className = "pdf-page";
+  el.id = "pdfdoc";
+  el.style.background = "#fff";
+  el.style.position = "relative";
+  el.style.width = "794px";
+  el.style.boxSizing = "border-box";
+  el.style.padding = "24px 28px";
+  el.style.fontSize = "11.5px";
+
+  el.innerHTML = `
+    <!-- Encabezado Oficial ARCA -->
+    <div class="pdf-arca-top" style="display:grid;grid-template-columns:1.15fr 74px 1.15fr;gap:12px;border:1.5px solid #0e2a22;border-radius:4px;padding:10px 12px;margin-bottom:10px;align-items:center">
+      <div class="pdf-brand" style="display:flex;gap:14px;align-items:center">
+        <img class="pdf-logo" src="${logo}" alt="" style="width:96px;height:78px;object-fit:contain;flex-shrink:0" />
+        <div class="pdf-co">
+          <div class="fantasia" style="font-size:20px;font-weight:800">${esc(s.nombreFantasia || s.razonSocial)}</div>
+          <div class="rs" style="font-size:12px;font-weight:700">${esc(s.razonSocial)}</div>
+          <div class="fisc" style="font-size:10px;color:#333;margin-top:4px;line-height:1.3">
+            ${esc(s.actividad || "Taller mecánico — mecánica automotor")}<br/>
+            <b>Condición IVA: ${esc(s.condicionIva || "Monotributo")}</b><br/>
+            ${esc([s.domicilio, s.localidad, s.provincia].filter(Boolean).join(" · "))}<br/>
+            ${esc([s.telefono, s.email].filter(Boolean).join(" · "))}
+          </div>
+        </div>
+      </div>
+
+      <div class="pdf-arca-letter-box" style="text-align:center;border-left:1.5px solid #0e2a22;border-right:1.5px solid #0e2a22;padding:0 4px">
+        <div class="letter" style="font-size:32px;font-weight:900;line-height:1">${esc(fac.letra)}</div>
+        <div class="cod" style="font-size:9px;font-weight:700;margin-top:2px">COD. ${esc(fac.tipoCod || "011")}</div>
+      </div>
+
+      <div class="pdf-badge" style="border:1.5px solid #0e2a22;padding:6px 8px;border-radius:4px;text-align:left">
+        <div style="font-size:16px;font-weight:800;letter-spacing:.05em;color:#0e2a22">FACTURA</div>
+        <div style="font-size:12px;font-weight:700;margin-top:2px">Punto de Venta: ${esc(fac.pv)} &nbsp; Comp. Nro: ${esc(pad(fac.nro, 8))}</div>
+        <div style="font-size:10px;color:#333;margin-top:4px;line-height:1.3">
+          <b>Fecha de Emisión:</b> ${dAR(fac.fecha)}<br/>
+          <b>CUIT:</b> ${esc(cuitFmt(s.cuit))}<br/>
+          <b>Ingresos Brutos:</b> ${esc(cuitFmt(s.iibb) || s.iibb)}<br/>
+          <b>Fecha de Inicio de Actividades:</b> ${dAR(s.inicioActividades)}
+        </div>
+      </div>
+    </div>
+
+    <!-- Datos del Período / Vencimiento -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;border:1px solid #d8d1c4;border-radius:4px;padding:6px 10px;font-size:10.5px;margin-bottom:10px;background:#faf8f4">
+      <div><b>Período Facturado Desde:</b> ${dAR(fac.periodoDesde || fac.fecha)} &nbsp; <b>Hasta:</b> ${dAR(fac.periodoHasta || fac.fecha)}</div>
+      <div style="text-align:right"><b>Fecha de Vto. para el pago:</b> ${dAR(fac.vtoPago || fac.vtoCae)}</div>
+    </div>
+
+    <!-- Datos del Receptor / Cliente -->
+    <div class="pdf-client" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+      <div class="pdf-box" style="border:1px solid #d8d1c4;border-radius:4px;padding:8px 10px;font-size:11px">
+        <div class="k" style="font-size:9.5px;color:#777;text-transform:uppercase;font-weight:700">Receptor / Cliente</div>
+        <b>${esc(cli.nombre)}</b><br/>
+        <b>${esc(cli.docTipo || "CUIT / DNI")}:</b> ${esc(cuitFmt(cli.docNro) || cli.docNro || "—")}<br/>
+        <b>Condición frente al IVA:</b> ${esc(cli.condicionIva || "Consumidor Final")}<br/>
+        <b>Domicilio:</b> ${esc([cli.domicilio, cli.localidad].filter(Boolean).join(" · ") || "—")}
+      </div>
+      <div class="pdf-box" style="border:1px solid #d8d1c4;border-radius:4px;padding:8px 10px;font-size:11px">
+        <div class="k" style="font-size:9.5px;color:#777;text-transform:uppercase;font-weight:700">Condición de Venta</div>
+        <b>${esc(PAGO_OPTS.find((p) => p.id === fac.pagoTipo)?.t || fac.pagoTipo || "Contado")}</b><br/>
+        ${fac.ordenCompra ? `Orden de Compra: <b>N° ${esc(fac.ordenCompra)} — Ejercicio ${esc(fac.ejercicio || "2026")}</b><br/>` : ""}
+        ${fac.presupuestoNumero ? `Presupuesto de origen: <b>${esc(fac.presupuestoNumero)}</b><br/>` : ""}
+        Comprobante Oficial Electrónico ARCA
+      </div>
+    </div>
+
+    <!-- Tabla de Ítems / Conceptos -->
+    <table class="pdf-table" style="width:100%;border-collapse:collapse;margin:10px 0">
+      <thead>
+        <tr style="background:#0e2a22;color:#fff;font-size:10.5px">
+          <th style="width:24px;padding:5px">#</th>
+          <th style="width:55px;padding:5px">Código</th>
+          <th style="text-align:left;padding:5px">Descripción / Concepto</th>
+          <th class="num" style="width:40px;text-align:right;padding:5px">Cant.</th>
+          <th style="width:35px;text-align:center;padding:5px">U.M.</th>
+          <th class="num" style="text-align:right;padding:5px">Precio Unit.</th>
+          ${isFacturaA ? `<th class="num" style="text-align:right;padding:5px">IVA %</th>` : ""}
+          <th class="num" style="text-align:right;padding:5px">Subtotal</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${(fac.items || [])
+          .map(
+            (it, i) => `<tr style="border-bottom:1px solid #eee;font-size:11px">
+          <td style="padding:5px;text-align:center">${String(i + 1).padStart(2, "0")}</td>
+          <td style="padding:5px;font-family:monospace;font-size:10px">${esc(it.codigo || "-")}</td>
+          <td style="padding:5px"><b>${esc(it.descripcion)}</b></td>
+          <td class="num" style="padding:5px;text-align:right">${it.cantidad}</td>
+          <td style="padding:5px;text-align:center">${esc(it.unidad || "un")}</td>
+          <td class="num" style="padding:5px;text-align:right">${money(it.precio)}</td>
+          ${isFacturaA ? `<td class="num" style="padding:5px;text-align:right">${it.ivaPct || 21}%</td>` : ""}
+          <td class="num" style="padding:5px;text-align:right"><b>${money(it.cantidad * it.precio)}</b></td>
+        </tr>`
+          )
+          .join("")}
+      </tbody>
+    </table>
+
+    <!-- Plan de Cuotas 30 / 60 / 90 días desde emisión de factura -->
+    ${
+      fac.installments?.length
+        ? `<div class="pdf-installments" style="margin-top:10px;border:1px solid #d8d1c4;border-radius:4px;padding:8px 10px;background:#faf8f4">
+        <div style="font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:#0e2a22;margin-bottom:6px">
+          Plan de Pago: ${esc(PAGO_OPTS.find((p) => p.id === fac.pagoTipo)?.t || fac.pagoTipo)} (a 30 / 60 / 90 días de la emisión)
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(${Math.min(fac.installments.length, 3)}, 1fr);gap:8px">
+          ${fac.installments
+            .map(
+              (cuo) => `<div style="background:#fff;border:1px solid #e6ddcf;padding:6px 8px;border-radius:4px;text-align:center">
+            <div style="font-size:10px;font-weight:700;color:#555">${esc(cuo.label)}</div>
+            <div style="font-size:11px;font-weight:800;color:#0e2a22;margin:2px 0">${money(cuo.amount)}</div>
+            <div style="font-size:9.5px;color:#666">Vto: <b>${dAR(cuo.dueDate)}</b></div>
+          </div>`
+            )
+            .join("")}
+        </div>
+      </div>`
+        : ""
+    }
+
+    <!-- Resumen de Totales Fiscales -->
+    <div class="pdf-foot" style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:14px">
+      <div>
+        ${fac.observaciones ? `<div class="pdf-box" style="border:1px solid #d8d1c4;border-radius:4px;padding:8px;font-size:10.5px"><div class="k" style="font-size:9.5px;font-weight:700;color:#777;text-transform:uppercase">Observaciones</div>${esc(fac.observaciones)}</div>` : ""}
+      </div>
+      <div>
+        <table class="pdf-tot" style="width:100%;font-size:11.5px">
+          <tr><td>Subtotal</td><td class="num" style="text-align:right"><b>${money(t.subtotal)}</b></td></tr>
+          ${t.descuento ? `<tr><td>Descuento</td><td class="num" style="text-align:right"><b>− ${money(t.descuento)}</b></td></tr>` : ""}
+          ${isFacturaA && t.iva ? `<tr><td>IVA 21% Discriminado</td><td class="num" style="text-align:right"><b>${money(t.iva)}</b></td></tr>` : ""}
+          <tr class="big" style="font-size:14px;font-weight:900;border-top:1.5px solid #0e2a22"><td>Importe Total</td><td class="num" style="text-align:right"><b>${money(t.total)}</b></td></tr>
+        </table>
+      </div>
+    </div>
+
+    <!-- Bloque Oficial ARCA / CAE / QR -->
+    <div class="pdf-arca-footer" style="display:flex;align-items:center;border:1.5px solid #0e2a22;border-radius:4px;padding:8px 10px;margin-top:14px;background:#faf8f4">
+      <div class="pdf-arca-qr-box" style="width:100px;height:100px;display:flex;align-items:center;justify-content:center;flex-shrink:0">
+        ${qrSvg}
+      </div>
+      <div class="pdf-arca-info" style="padding:0 8px;flex:1">
+        <div style="display:flex;align-items:baseline;gap:8px">
+          <span class="pdf-arca-logo" style="font-size:22px;font-weight:900;color:#0e2a22">ARCA</span>
+          <span class="pdf-arca-sub" style="font-size:10px;color:#666">Agencia de Recaudación y Control Aduanero</span>
+        </div>
+        <div style="font-size:10px;color:#444;margin-top:4px">
+          Comprobante Autorizado por ARCA (ex-AFIP) · Régimen de Facturación Electrónica RG 4291/2018.
+        </div>
+        <div style="font-size:9px;color:#666;margin-top:2px">
+          Escaneá el código QR para verificar la autenticidad y validez fiscal de este comprobante en el servidor de ARCA.
+        </div>
+      </div>
+      <div class="pdf-arca-cae-box" style="text-align:right;border-left:1px solid #d8d1c4;padding-left:12px;flex-shrink:0">
+        <div style="font-size:12px;font-weight:800;color:#0e2a22">CAE N°:</div>
+        <div style="font-family:monospace;font-size:14px;font-weight:700;letter-spacing:.05em">${esc(fac.cae)}</div>
+        <div style="font-size:11px;margin-top:4px"><b>Fecha de Vto. de CAE:</b></div>
+        <div style="font-size:11px;font-weight:700">${dAR(fac.vtoCae)}</div>
+      </div>
+    </div>
+  `;
+
+  return el;
+}
+
+async function shareMultipleFacturas(facturaIds) {
+  if (!facturaIds || !facturaIds.length) return toast("Seleccioná al menos una factura.");
+  toast(`Generando ${facturaIds.length} facturas PDF…`);
+
+  const files = [];
+  const facList = [];
+  let totalMonto = 0;
+  let clientName = "";
+  let clientWa = "";
+
+  const s = state.settings || (await api("/api/settings")) || {};
+
+  for (let idx = 0; idx < facturaIds.length; idx++) {
+    const id = facturaIds[idx];
+    toast(`Generando PDF (${idx + 1}/${facturaIds.length})…`);
+    const fac = await api("/api/facturas/" + id);
+    if (!fac) continue;
+    facList.push(fac);
+    totalMonto += Number(fac.totals?.total || 0);
+    if (!clientName && fac.clientSnapshot?.nombre) clientName = fac.clientSnapshot.nombre;
+    if (!clientWa && fac.clientSnapshot?.whatsapp) clientWa = fac.clientSnapshot.whatsapp;
+
+    const virtualEl = createVirtualFacturaEl(fac, s);
+    const blob = await makePdfBlob(virtualEl);
+    const fileName = `Factura_ARCA_${fac.letra}_${fac.numero}.pdf`;
+    const file = new File([blob], fileName, { type: "application/pdf" });
+    files.push(file);
+  }
+
+  const facsLines = facList
+    .map(
+      (f) =>
+        `• ${f.tipoCmpNombre || "Factura " + f.letra} N° ${f.numero} (${money(f.totals?.total || 0)}) - CAE: ${f.cae || "—"}`
+    )
+    .join("\n");
+
+  const shareText = `Hola ${clientName || "Cliente"}, te adjunto ${files.length} Facturas Electrónicas ARCA por un total de ${money(totalMonto)}:
+
+${facsLines}
+
+¡Muchas gracias!`;
+
+  if (navigator.canShare && navigator.canShare({ files })) {
+    await navigator.share({
+      files: files,
+      title: `${files.length} Facturas ARCA`,
+      text: shareText,
+    });
+    return;
+  }
+
+  // Fallback para descarga
+  for (const f of files) {
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(f);
+    a.download = f.name;
+    a.click();
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  toast(`${files.length} Facturas descargadas. Abriendo WhatsApp…`);
+
+  const wa = clientWa.replace(/\D/g, "");
+  const msg = encodeURIComponent(shareText);
+  setTimeout(() => {
+    if (wa) window.open(`https://wa.me/${wa}?text=${msg}`, "_blank");
+    else window.open(`https://wa.me/?text=${msg}`, "_blank");
+  }, 600);
+}
+
+async function downloadMultipleFacturas(facturaIds) {
+  if (!facturaIds || !facturaIds.length) return toast("Seleccioná al menos una factura.");
+  toast(`Generando ${facturaIds.length} facturas PDF…`);
+  const s = state.settings || (await api("/api/settings")) || {};
+
+  for (let idx = 0; idx < facturaIds.length; idx++) {
+    const id = facturaIds[idx];
+    toast(`Descargando (${idx + 1}/${facturaIds.length})…`);
+    const fac = await api("/api/facturas/" + id);
+    if (!fac) continue;
+    const virtualEl = createVirtualFacturaEl(fac, s);
+    const blob = await makePdfBlob(virtualEl);
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `Factura_ARCA_${fac.letra}_${fac.numero}.pdf`;
+    a.click();
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  toast(`${facturaIds.length} Facturas descargadas.`);
 }
 
 async function downloadPdf(numero) {
@@ -3349,29 +3720,37 @@ async function viewFacturas(v) {
     </div>
 
     <input class="search" id="fsearch" placeholder="Buscar por cliente, número o CAE…" value="${esc(q)}" />
-    <div class="filters">
-      ${chips
-        .map(
-          (c) =>
-            `<button class="chip ${letra === c ? "on" : ""}" data-l="${c}">${c === "todas" ? "Todas" : "Factura " + c}</button>`
-        )
-        .join("")}
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px">
+      <div class="filters" style="margin-bottom:0">
+        ${chips
+          .map(
+            (c) =>
+              `<button class="chip ${letra === c ? "on" : ""}" data-l="${c}">${c === "todas" ? "Todas" : "Factura " + c}</button>`
+          )
+          .join("")}
+      </div>
+      ${
+        list.length
+          ? `<button class="btn btn-sm btn-ghost" id="btn-toggle-all" style="font-size:11.5px;padding:4px 10px">☑️ Seleccionar todas</button>`
+          : ""
+      }
     </div>
 
     ${
       list.length
         ? `<div class="list">${list
             .map(
-              (x) => `<div class="row" style="cursor:pointer" onclick="go('factura-pdf',{id:'${x.id}'})">
-          <div class="meta">
+              (x) => `<div class="row" style="cursor:pointer;display:flex;align-items:center;gap:10px" data-row-id="${x.id}">
+          <input type="checkbox" class="fac-select-chk" data-id="${x.id}" data-monto="${x.totals?.total || 0}" style="width:18px;height:18px;cursor:pointer;accent-color:#1b7a4c;flex-shrink:0" onclick="event.stopPropagation()" />
+          <div class="meta" style="flex:1" onclick="go('factura-pdf',{id:'${x.id}'})">
             <div class="title" style="display:flex;align-items:center;gap:6px">
               <span class="pill" style="background:#0e2a22;color:#fff;font-weight:800;font-size:11px;padding:2px 6px">${x.letra}</span>
-              ${esc(x.clientSnapshot?.nombre || "Cliente")}
+              <b>${esc(x.clientSnapshot?.nombre || "Cliente")}</b>
             </div>
             <div class="sub">${esc(x.numero)} · ${dAR(x.fecha)} · CAE: ${esc(x.cae)}</div>
           </div>
           <div class="right" style="display:flex;align-items:center;gap:8px">
-            <div style="text-align:right">
+            <div style="text-align:right" onclick="go('factura-pdf',{id:'${x.id}'})">
               <span class="pill facturado">Emitida</span>
               <div class="amt">${money(x.totals?.total || 0)}</div>
             </div>
@@ -3382,7 +3761,81 @@ async function viewFacturas(v) {
             .join("")}</div>`
         : `<div class="empty">Todavía no hay facturas emitidas. Podés pasar cualquier presupuesto a Factura Electrónica ARCA en un toque.</div>`
     }
+
+    <!-- Barra Flotante de Acciones en Lote (Múltiple Selección) -->
+    <div id="fac-batch-bar" style="display:none;position:fixed;bottom:18px;left:14px;right:14px;max-width:560px;margin:0 auto;background:#0e2a22;color:#fff;border-radius:12px;padding:12px 16px;box-shadow:0 8px 28px rgba(0,0,0,0.45);align-items:center;justify-content:space-between;gap:10px;z-index:9999;border:1.5px solid #c4a35a">
+      <div>
+        <div style="font-weight:800;font-size:13px"><span id="batch-count">0</span> facturas elegidas</div>
+        <div style="font-size:11px;color:#c4a35a;font-weight:700" id="batch-total">$ 0,00</div>
+      </div>
+      <div style="display:flex;gap:6px;align-items:center">
+        <button class="btn btn-ok" id="btn-batch-share" style="background:#1b7a4c;color:#fff;font-weight:800;font-size:12px;padding:8px 12px;white-space:nowrap">📲 Enviar por WhatsApp</button>
+        <button class="btn btn-ghost" id="btn-batch-dl" style="color:#fff;border-color:#777;font-size:11px;padding:8px 10px;white-space:nowrap">📥 Bajar</button>
+        <button class="btn btn-ghost" id="btn-batch-clear" style="color:#ddd;border:none;font-size:14px;padding:4px 6px" title="Deseleccionar">✕</button>
+      </div>
+    </div>
   `;
+
+  const chks = $$(".fac-select-chk", v);
+  const batchBar = $("#fac-batch-bar", v);
+  const countSpan = $("#batch-count", v);
+  const totalDiv = $("#batch-total", v);
+
+  function updateBatchBar() {
+    const selected = Array.from(chks).filter((c) => c.checked);
+    if (!selected.length) {
+      if (batchBar) batchBar.style.display = "none";
+      return;
+    }
+    const sum = selected.reduce((acc, c) => acc + Number(c.dataset.monto || 0), 0);
+    if (countSpan) countSpan.textContent = selected.length;
+    if (totalDiv) totalDiv.textContent = money(sum);
+    if (batchBar) batchBar.style.display = "flex";
+  }
+
+  chks.forEach((c) => c.addEventListener("change", updateBatchBar));
+
+  const btnToggleAll = $("#btn-toggle-all", v);
+  if (btnToggleAll) {
+    let allChecked = false;
+    btnToggleAll.onclick = () => {
+      allChecked = !allChecked;
+      chks.forEach((c) => (c.checked = allChecked));
+      btnToggleAll.textContent = allChecked ? "☒ Deseleccionar todas" : "☑️ Seleccionar todas";
+      updateBatchBar();
+    };
+  }
+
+  const btnBatchClear = $("#btn-batch-clear", v);
+  if (btnBatchClear) {
+    btnBatchClear.onclick = () => {
+      chks.forEach((c) => (c.checked = false));
+      if (btnToggleAll) btnToggleAll.textContent = "☑️ Seleccionar todas";
+      updateBatchBar();
+    };
+  }
+
+  const btnBatchShare = $("#btn-batch-share", v);
+  if (btnBatchShare) {
+    btnBatchShare.onclick = async () => {
+      const selectedIds = Array.from(chks)
+        .filter((c) => c.checked)
+        .map((c) => c.dataset.id);
+      if (!selectedIds.length) return toast("Seleccioná al menos una factura");
+      await shareMultipleFacturas(selectedIds);
+    };
+  }
+
+  const btnBatchDl = $("#btn-batch-dl", v);
+  if (btnBatchDl) {
+    btnBatchDl.onclick = async () => {
+      const selectedIds = Array.from(chks)
+        .filter((c) => c.checked)
+        .map((c) => c.dataset.id);
+      if (!selectedIds.length) return toast("Seleccioná al menos una factura");
+      await downloadMultipleFacturas(selectedIds);
+    };
+  }
 
   $("#fsearch").addEventListener("change", (e) => {
     state.params.q = e.target.value;
